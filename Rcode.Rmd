@@ -1,0 +1,371 @@
+---
+title: "Stat 601 Final Project- Annotated R Code"
+author: "Nikhil Karthik Pamidimukkala"
+date: "December 10, 2018"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,fig.height=5, fig.width=9)
+```
+
+
+```{r, eval=FALSE}
+# Installing required packages
+install.packages("dplyr")
+install.packages("reshape2")
+install.packages("tidyr")
+install.packages("ggplot2")
+install.packages("magrittr")
+install.packages("ggpubr")
+install.packages("lme4")
+install.packages("caret")
+install.packages("sjPlot")
+
+```
+
+
+
+```{r, warning=FALSE, message=FALSE}
+
+# Loading required libraries
+library(dplyr)
+library(reshape2)
+library(tidyr)
+library(ggplot2)
+library(magrittr)
+library(ggpubr)
+library(lme4)
+library(caret)
+library(sjPlot)
+
+
+
+```
+
+# Preparing data for graphical plots
+
+```{r}
+
+# Reading the data set 
+
+txt <- read.table("C:/Users/Nikhil Karthik/Desktop/Stat 601/Final Project/DSL-StrongPasswordData.txt", sep = "", header = TRUE)
+
+# making a copy into pwd_strk
+
+pwd_strk <- txt
+
+
+# Calculating total hold time for each time passcode is typed
+
+pwd_strk$Total_Hold_time<- pwd_strk %>% select(contains("H.")) %>% apply(.,1, sum) 
+
+
+# Calculating total up-down time for each time passcode is typed
+
+pwd_strk$Total_UD_time<- pwd_strk %>% select(contains("UD.")) %>% apply(.,1, sum) 
+
+
+# calculating total time to type passcode (sum of down-down features plus H.Return)
+
+pwd_strk$Total_time<- pwd_strk %>% select(contains("DD."),H.Return) %>% apply(.,1, sum) 
+
+
+# Count negative occurences  (negative values indicate overlap)
+
+pwd_strk$overlap_cnt <- pwd_strk %>% select(-1,-2,-3) %>% apply(.,1,FUN = function(row) length(which(row < 0 )))
+
+# creating a binary variable with 0 as no overlap and 1 as overlap (negative value in feature)
+
+pwd_strk$overlap  <- pwd_strk %>% select(-1,-2,-3) %>% apply(.,1, FUN = function(row) any(row <0)) %>% ifelse(.,1,0)
+
+# converting overlap as a factor
+pwd_strk$overlap <- factor(pwd_strk$overlap)
+
+# counting the number of overlap occurrences and grouping by subject and sessionIndex
+ndt_1 <- pwd_strk %>% group_by(sessionIndex,subject) %>% tally(overlap == 1)
+
+# counting the number of non-occurences  of overlap and grouping by subject and sessionIndex
+ndt <- pwd_strk %>% group_by(sessionIndex,subject) %>% tally(overlap == 0)
+
+# Assigning appropriate column names
+colnames(ndt) <- c("sessionIndex","subject","Overlap_No")
+
+# Assigning appropriate column names
+colnames(ndt_1) <- c("sessionIndex","subject","Overlap_Yes")
+
+# Combing the data frame to create the data for the model
+anadt<- bind_cols(ndt,ndt_1[,3])
+
+# Creating Proportion of overlap occurrences column
+anadt <- anadt %>% group_by(sessionIndex) %>% mutate(Proportion_of_Occurences = Overlap_Yes/(Overlap_Yes+ Overlap_No))
+
+
+
+# Preparing data appropriately to make a bar plot of overlap counts session wise
+
+mismtc <- c()
+for (i in 1:8){
+mismtc[i]  <- pwd_strk %>% filter(sessionIndex == i) %>% select(overlap_cnt) %>% apply(.,2, sum)
+
+  }
+sinx <- factor(seq(1:8))
+misma_df <- data.frame(cbind(mismtc,sinx))
+names(misma_df) <- c("Overlap_Count", "SessionIndex")
+misma_df$SessionIndex <-  factor(misma_df$SessionIndex)
+
+
+
+
+# Preparing data to plot mean time to type passcode session wise
+
+# changing to data wide format
+mn <- pwd_strk %>% dcast(.,sessionIndex+rep~subject, value.var= "Total_time")  
+
+# data frame for mean times
+mns <- data.frame(rep(0,51))
+names(mns) <- "dummy"
+
+# for loop to calculate mean times
+for (i in 1:8){
+  
+if(i == 1){
+  
+mns$mean <- mn %>% select(-rep) %>% filter(sessionIndex == i) %>% select(-sessionIndex) %>% apply(.,2, mean)
+mns <- mns %>% select(-dummy)
+}
+  
+else if(i >= 2){
+new_df <- mn %>% select(-rep) %>% filter(sessionIndex == i) %>% select(-sessionIndex) %>% apply(.,2, mean) 
+new_df <-data.frame(new_df)
+names(new_df) <- "mean"
+mns <- rbind(mns, new_df)
+}  
+  
+
+}
+
+# Assigning the calculations to a data frame
+
+ss <- rep(1:8,51)
+ss <- ss[order(ss)]
+subj <- colnames(mn[,c(-1,-2)])
+subj  <- rep(subj,8)  
+mns <- cbind(subj, ss , mns)
+colnames(mns) <- c("subject","sessionIndex","Mean")
+
+row.names(mns) <- NULL
+
+
+```
+
+
+
+```{r, message=FALSE, warning=FALSE}
+
+
+# Density plots of each keystroke feature
+
+# Referenced from Model Selection Review D2L Stat 601
+par(mfrow=c(6,6))
+par(mar=c(1.5,0.1,0.1,0.1))
+for (i in 4:36){
+  plot(density(pwd_strk[,i]), axes = F,col = "red",cex =0.5,main="")
+  box()
+  legend("topright", paste(colnames(pwd_strk[i])))
+  
+}
+
+
+```
+
+
+```{r}
+
+
+
+
+# Scatterplot with smoother to show change in mean time to type passcode over sessions
+
+ggplot(data = mns ,aes(x = sessionIndex, y = Mean)) + geom_point() + geom_smooth()+ labs(x = "Session Index",y= "Mean time",title = "Mean time to type passcode in Each session - Loess Smoothing") + theme(plot.title = element_text(size=9)) +    theme(axis.title  =element_text(size=8)) 
+
+# Spider plot showing change in mean time to type passcode over sessions for each subject
+
+ggplot(data = mns ,aes(x = sessionIndex, y = Mean)) + geom_line(aes(color = subject, group = subject),size=0.5, alpha = 0.7) + geom_point() +  labs(x = "Session Index",y= "Mean time",title = "Mean time to type passcode in Each session") + theme(axis.text.x = element_text( hjust = 1)) + theme(legend.text=element_text(size=rel(0.5)))
+
+
+# Hold Time Graphs
+# Plotting only gam() smoothers for each Hold feature to know 
+#its change over repetitions and sessionIndex
+
+
+Hgrp<- grep("H.",colnames(pwd_strk))
+
+hd <- function(i){
+ggplot(data = pwd_strk, aes(x= rep,y = pwd_strk[,Hgrp[i]])) + geom_smooth(aes(group = factor(sessionIndex),color = factor(sessionIndex)), size=0.2, se = F) +labs(color ="Session Index", y =colnames(pwd_strk)[Hgrp[i]])
+}
+
+hldarr <- ggarrange(hd(1),hd(2),hd(3),hd(4),hd(5),hd(6),hd(7),hd(8),hd(9),hd(10),hd(11), common.legend = TRUE)
+hldarr
+
+# UD graphs
+# Plotting only gam() smoothers for each Up-Down feature to know
+#its change over repetitions and sessionIndex
+
+UDgrp<- grep("UD.",colnames(pwd_strk))
+
+ud <- function(i){
+ggplot(data = pwd_strk, aes(x= rep,y = pwd_strk[,UDgrp[i]])) + geom_smooth(aes(group = factor(sessionIndex),color = factor(sessionIndex)),size =0.2, se = F) +labs(color ="Session Index", y =colnames(pwd_strk)[UDgrp[i]])
+}
+
+udarr <- ggarrange(ud(1),ud(2),ud(3),ud(4),ud(5),ud(6),ud(7),ud(8),ud(9),ud(10), common.legend = T)
+
+udarr
+
+
+
+# Plotting smoothers to observe change in Total_Hold_Time, Total_UD_time 
+# and Total_time to passcode over repetitions and sessions
+
+a<- ggplot(data = pwd_strk, aes(x= rep,y = Total_UD_time)) + geom_smooth(aes(group = factor(sessionIndex),color = factor(sessionIndex)),size=0.2, se = F) +labs(color ="Session Index")  
+
+b<- ggplot(data = pwd_strk, aes(x= rep,y = Total_Hold_time)) + geom_smooth(aes(group = factor(sessionIndex),color = factor(sessionIndex)),size=0.2, se = F) +labs(color ="Session Index")
+
+c <- ggplot(data = pwd_strk, aes(x= rep,y = Total_time)) + geom_smooth(aes(group = factor(sessionIndex),color = factor(sessionIndex)), size=0.2,se = F) +labs(color ="Session Index")
+
+ttarr <- ggarrange(a,b,c,ncol =3, common.legend = T)
+ttarr
+
+
+
+# Barplot with overlap counts for each sessions
+
+pr1<- ggplot(data = misma_df, aes(y= Overlap_Count, x = SessionIndex)) + geom_bar(stat = "identity") + labs(title="Total Overlap Count ") +  theme(plot.title = element_text(size=9)) +    theme(axis.title  =element_text(size=8))
+
+
+# smoother for proportion of overlap occurrences
+
+pr2<- ggplot(anadt,aes(Proportion_of_Occurences, x = sessionIndex)) + geom_smooth()+ labs(y ="Proportion of Overlap Occurence ",title="Loess Smoother") +   theme(plot.title = element_text(size=9)) +    theme(axis.title  =element_text(size=8))
+
+
+ggarrange(pr1,pr2)
+
+```
+
+
+# Fitting Models
+
+
+
+
+```{r, fig.height=5, fig.width=9}
+
+
+
+# Fitting a generalized linear mixed effects model with two-column matrix (Overlap_Yes,Overlap_No) as response , sessionIndex as predictor, subject is added as the random intercept
+
+aa <- glmer( cbind(Overlap_Yes,Overlap_No)~sessionIndex 
+      +(1|subject),family = binomial(),data = anadt)
+
+
+# Fitting a generalized linear mixed effects model with two-column matrix (Overlap_Yes,Overlap_No) as response , sessionIndex as predictor, sessionIndex as random slope and subject is added as the random intercept
+
+aa1 <- glmer(cbind(Overlap_Yes,Overlap_No)~sessionIndex +
+  (sessionIndex|subject),family = binomial(),data = anadt)
+
+
+# LRT test using anova()
+
+
+anv <- anova(aa,aa1)
+anv
+
+# Summary of random slope and intercept model
+summary(aa1)
+
+
+
+```
+
+
+
+# Model Diagnostics
+
+```{r, fig.height=5, fig.width=9, warning=F}
+
+
+# Q-Q plot of random effects
+plot_model(aa1,type = "diag")
+
+# Residual vs Fitted and Q-Q plot of residuals
+par(mfrow=c(1,2))
+qqnorm(residuals(aa1), pch = 16)
+qqline(residuals(aa1))
+grid()
+
+plot(fitted(aa1), residuals(aa, type = "deviance"), xlab ="Fitted Values",ylab ="Residuals", main ="Fitted vs Residuals", pch = 16)
+abline(h=0,lty=1, col="red", lwd = 3)
+grid() 
+
+# Dot plot of random effects
+plot_model(aa1, type = "re")
+
+
+```
+
+# Post-hoc analysis
+
+
+```{r}
+
+
+# Testing significance of predictors using LRT test
+aa3 <- glmer(cbind(Overlap_Yes, Overlap_No)~(sessionIndex|subject), 
+       family = binomial(),data= anadt)
+
+anova(aa1, aa3)
+
+
+# Testing significance of random effects using LRT test
+aa4 <- glm(cbind(Overlap_Yes, Overlap_No)~sessionIndex, 
+           family = binomial(),data = anadt)
+anova(aa1,aa4)
+
+
+
+```
+
+  
+
+
+
+
+
+
+##References 
+
+https://stackoverflow.com/questions/5629054/an-elegant-way-to-count-number-of-negative-elements-in-a-vector
+
+
+http://bbolker.github.io/mixedmodels-misc/glmmFAQ.html#testing-significance-of-random-effects
+
+http://ddar.datavis.ca/pages/extra/titanic-glm-ex.pdf
+
+https://strengejacke.wordpress.com/2017/10/23/one-function-to-rule-them-all-visualization-of-regression-models-in-rstats-w-sjplot/
+
+https://www.ssc.wisc.edu/sscc/pubs/MM/MM_TestEffects.html#test-of-random-parameters
+
+Hlavac, Marek (2018). stargazer: Well-Formatted Regression and Summary Statistics Tables.
+ R package version 5.2.2. https://CRAN.R-project.org/package=stargazer 
+
+https://stats.stackexchange.com/questions/32419/difference-between-generalized-linear-models-generalized-linear-mixed-models
+
+D2l-Stat-601-Final Project-Model Selection Review
+
+https://datascienceplus.com/linear-mixed-model-workflow/
+
+
